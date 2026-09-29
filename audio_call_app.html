@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="si" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>audioCall Pro - ශ්‍රව්‍ය ඇමතුම් පද්ධතිය</title>
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#eef2ff',
+                            100: '#e0e7ff',
+                            500: '#6366f1',
+                            600: '#4f46e5',
+                            700: '#4338ca',
+                            900: '#312e81',
+                        }
+                    },
+                    animation: {
+                        'pulse-slow': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'ping-slow': 'ping 2.5s cubic-bezier(0, 0, 0.2, 1) infinite',
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- FontAwesome Icons CDN -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- PeerJS CDN -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+
+    <style>
+        /* Custom range thumb styling for fine volume control */
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 20px;
+            width: 20px;
+            border-radius: 50%;
+            background: #6366f1;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(99, 102, 241, 0.5);
+            transition: all 0.2s ease-in-out;
+        }
+        input[type=range]::-webkit-slider-thumb:hover {
+            transform: scale(1.15);
+            background: #818cf8;
+        }
+        .visualizer-bar {
+            transition: height 0.05s ease;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col justify-between selection:bg-brand-500 selection:text-white">
+
+    <!-- Header -->
+    <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-40">
+        <div class="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-400 flex items-center justify-center shadow-lg shadow-brand-500/20">
+                    <i class="fa-solid font-bold fa-phone-volume text-white text-lg"></i>
+                </div>
+                <div>
+                    <h1 class="text-lg font-bold tracking-tight text-white">AudioCall Pro</h1>
+                    <p class="text-xs text-slate-400">P2P ශ්‍රව්‍ය ඇමතුම් පද්ධතිය (Direct & Local P2P)</p>
+                </div>
+            </div>
+            
+            <div id="connectionStatusBadge" class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 mr-2 animate-pulse"></span>
+                <span id="statusText">සූදානම්</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="max-w-4xl mx-auto px-4 py-6 w-full flex-1 flex flex-col justify-center gap-6">
+
+        <!-- Sandbox Security Notice if WebSockets are restricted -->
+        <div id="canvasWarning" class="hidden bg-amber-950/40 border border-amber-500/30 rounded-2xl p-4 text-xs text-amber-200 flex items-start gap-3">
+            <i class="fa-solid fa-triangle-exclamation text-amber-400 text-lg mt-0.5 shrink-0"></i>
+            <div>
+                <span class="font-bold text-amber-300">Canvas Preview මාදිලිය හඳුනාගන්නා ලදී:</span>
+                <p class="text-amber-200/80 mt-1 leading-relaxed">
+                    මෙම Canvas පරිසරය තුළ External WebSocket සීමා කර ඇත. නමුත් ඔබට <b>Tabs දෙකක් හෝ එකම Browser එකක Windows දෙකක්</b> විවෘත කර මෙම App එක පරීක්ෂා කළ හැක! BroadcastChannel මගින් local call direct සම්බන්ධ වේ.
+                </p>
+            </div>
+        </div>
+
+        <!-- ID & Connection Setup Card -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <!-- Your ID Box -->
+            <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden backdrop-blur-sm">
+                <div class="absolute -right-10 -bottom-10 w-32 h-32 bg-brand-500/5 rounded-full blur-2xl"></div>
+                
+                <div class="flex items-center justify-between mb-2">
+                    <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                        <i class="fa-solid fa-user-circle mr-1 text-brand-500"></i> ඔබගේ ID එක (Your ID)
+                    </label>
+                    <button onclick="generateNewId()" class="text-[11px] text-brand-400 hover:text-brand-300 underline flex items-center gap-1" title="නව ID එකක් ලබාගන්න">
+                        <i class="fa-solid fa-rotate-right"></i>
+                        <span>නව ID</span>
+                    </button>
+                </div>
+                
+                <div class="flex items-center gap-2">
+                    <div class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 font-mono text-sm tracking-wider text-brand-100 select-all overflow-x-auto whitespace-nowrap" id="myIdDisplay">
+                        <span class="text-slate-500">ID එක සැකසෙමින්...</span>
+                    </div>
+                    <button id="copyIdBtn" onclick="copyMyId()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-3 rounded-xl transition duration-200 flex items-center gap-2 shrink-0 border border-slate-700 active:scale-95" title="Copy ID">
+                        <i class="fa-regular fa-copy"></i>
+                        <span class="hidden sm:inline text-xs font-medium">කොපි</span>
+                    </button>
+                </div>
+                <p class="text-xs text-slate-500 mt-2">
+                    * මෙම ID එක අනෙක් කෙනාට ලබා දී ඔබට ඇමතුමක් ගන්නා ලෙස දන්වන්න.
+                </p>
+            </div>
+
+            <!-- Call Remote Peer Box -->
+            <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl relative overflow-hidden backdrop-blur-sm">
+                <div class="absolute -left-10 -bottom-10 w-32 h-32 bg-indigo-500/5 rounded-full blur-2xl"></div>
+
+                <label class="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                    <i class="fa-solid fa-paper-plane mr-1 text-emerald-500"></i> අනෙක් කෙනාගේ ID එක (Remote Peer ID)
+                </label>
+                
+                <div class="flex flex-col sm:flex-row gap-2">
+                    <input type="text" id="remoteIdInput" placeholder="උදා: call-8f3a" class="flex-1 bg-slate-950 border border-slate-800 focus:border-brand-500 focus:ring-1 focus:ring-brand-500 text-slate-100 rounded-xl px-4 py-3 text-sm font-mono outline-none transition">
+                    <button id="startCallBtn" onclick="initiateCall()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-5 py-3 rounded-xl transition duration-200 flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 active:scale-95 shrink-0">
+                        <i class="fa-solid fa-phone"></i>
+                        <span>ඇමතුමක් ගන්න</span>
+                    </button>
+                </div>
+                <p class="text-xs text-slate-500 mt-2">
+                    * සම්බන්ධ වීමට අනෙක් කෙනාගේ ID එක මෙතැනට ඇතුළත් කරන්න.
+                </p>
+            </div>
+        </div>
+
+        <!-- Manual Signal Token Option for strictly blocked networks -->
+        <div class="bg-slate-900/60 border border-slate-800/80 rounded-xl p-4">
+            <button onclick="toggleManualSignalDrawer()" class="text-xs text-slate-400 hover:text-slate-200 flex items-center justify-between w-full font-medium">
+                <span class="flex items-center gap-2">
+                    <i class="fa-solid fa-key text-amber-400"></i>
+                    <span>Manual Token Exchange (සර්වර් රහිත සෘජු සම්බන්ධතාව)</span>
+                </span>
+                <i id="manualDrawerIcon" class="fa-solid fa-chevron-down text-slate-500"></i>
+            </button>
+            <div id="manualSignalDrawer" class="hidden mt-4 pt-3 border-t border-slate-800/60 space-y-3">
+                <p class="text-xs text-slate-400 leading-relaxed">
+                    WebSocket සර්වර් අවහිර වී ඇති විට, ඇමතුම් කෝඩ් එක (Token) කොපි කර අනෙක් කෙනාට යැවීමෙන් සෘජුවම සම්බන්ධ විය හැක.
+                </p>
+                <div class="flex flex-col sm:flex-row gap-2">
+                    <button onclick="createManualOffer()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-xl text-xs font-medium transition flex items-center justify-center gap-2">
+                        <i class="fa-solid fa-code"></i> Call Code එකක් සාදන්න
+                    </button>
+                    <button onclick="pasteManualAnswer()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-2 rounded-xl text-xs font-medium transition flex items-center justify-center gap-2">
+                        <i class="fa-solid fa-paste"></i> Code එක ඇතුළත් කරන්න
+                    </button>
+                </div>
+                <textarea id="manualTokenBox" class="w-full h-20 bg-slate-950 border border-slate-800 rounded-xl p-2 font-mono text-[11px] text-slate-300 outline-none" placeholder="Call Code එක මෙතැන දිස්වේ හෝ ඇතුළත් කරන්න..."></textarea>
+            </div>
+        </div>
+
+        <!-- Active Call Dashboard -->
+        <div id="activeCallCard" class="hidden bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl relative overflow-hidden transition-all duration-300">
+            <div class="flex flex-col items-center text-center">
+                
+                <!-- Visual Avatar & Pulse Visualizer -->
+                <div class="relative mb-4">
+                    <div id="pulseRing" class="absolute inset-0 rounded-full bg-brand-500/20 animate-ping-slow hidden"></div>
+                    <div class="w-24 h-24 rounded-full bg-gradient-to-b from-slate-800 to-slate-950 border-2 border-brand-500/40 flex items-center justify-center relative z-10 shadow-inner">
+                        <i id="callAvatarIcon" class="fa-solid fa-user-astronaut text-4xl text-brand-400"></i>
+                    </div>
+                </div>
+
+                <h3 class="text-lg font-bold text-slate-100 mb-1" id="peerConnectedTitle">සම්බන්ධ වී ඇත</h3>
+                <p class="text-xs font-mono text-slate-400 mb-3" id="peerConnectedId">ID: -----</p>
+                
+                <!-- Timer Badge -->
+                <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-950 border border-slate-800 text-slate-300 text-xs font-mono mb-6">
+                    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span id="callTimer">00:00</span>
+                </div>
+
+                <!-- Live Sound Level Bars -->
+                <div class="flex items-center gap-1.5 h-8 mb-6">
+                    <div class="visualizer-bar w-1.5 bg-brand-500 rounded-full h-2" id="bar1"></div>
+                    <div class="visualizer-bar w-1.5 bg-brand-500 rounded-full h-3" id="bar2"></div>
+                    <div class="visualizer-bar w-1.5 bg-brand-500 rounded-full h-2" id="bar3"></div>
+                    <div class="visualizer-bar w-1.5 bg-brand-500 rounded-full h-4" id="bar4"></div>
+                    <div class="visualizer-bar w-1.5 bg-brand-500 rounded-full h-2" id="bar5"></div>
+                </div>
+
+                <!-- Active Call Main Buttons -->
+                <div class="flex items-center gap-4">
+                    <button id="toggleMicBtn" onclick="toggleMute()" class="w-12 h-12 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 flex items-center justify-center transition active:scale-95" title="මයික්‍රෆෝනය Mute / Unmute">
+                        <i id="micIcon" class="fa-solid fa-microphone"></i>
+                    </button>
+
+                    <button onclick="endCall()" class="px-6 py-3 rounded-full bg-rose-600 hover:bg-rose-500 text-white font-semibold flex items-center gap-2 shadow-lg shadow-rose-600/30 transition active:scale-95">
+                        <i class="fa-solid fa-phone-slash"></i>
+                        <span>විසන්ධි කරන්න</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sound Attenuation & Output Routing Section -->
+        <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-5">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div class="flex items-center gap-2">
+                    <i class="fa-solid fa-sliders text-brand-400"></i>
+                    <h2 class="text-sm font-semibold text-slate-200">ශබ්ද පාලනය සහ Earpiece/Speaker පිහිටුවීම්</h2>
+                </div>
+                <span class="text-xs bg-brand-500/10 text-brand-400 border border-brand-500/20 px-2.5 py-0.5 rounded-full">Web Audio API</span>
+            </div>
+
+            <!-- Speaker Volume Attenuation Slider -->
+            <div class="space-y-3">
+                <div class="flex justify-between items-center text-xs">
+                    <span class="text-slate-300 font-medium">ලැබෙන ශබ්ද මට්ටම (Incoming Audio Gain)</span>
+                    <span class="font-mono text-brand-400 font-bold" id="volumePercentage">30%</span>
+                </div>
+                
+                <input type="range" id="gainSlider" min="0" max="1" step="0.01" value="0.3" oninput="updateGain(this.value)" class="w-full h-2 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-brand-500">
+                
+                <!-- Micro Volume Preset Buttons -->
+                <div class="grid grid-cols-4 gap-2 pt-1">
+                    <button onclick="setVolumePreset(0.02)" class="py-1.5 px-2 bg-slate-950 hover:bg-brand-900/50 hover:border-brand-500/50 border border-slate-800 rounded-lg text-xs text-slate-300 transition text-center">
+                        <div class="font-bold text-amber-400">2%</div>
+                        <div class="text-[10px] text-slate-500">අතිශය අඩු</div>
+                    </button>
+                    <button onclick="setVolumePreset(0.10)" class="py-1.5 px-2 bg-slate-950 hover:bg-brand-900/50 hover:border-brand-500/50 border border-slate-800 rounded-lg text-xs text-slate-300 transition text-center">
+                        <div class="font-bold text-amber-300">10%</div>
+                        <div class="text-[10px] text-slate-500">කුඩා</div>
+                    </button>
+                    <button onclick="setVolumePreset(0.30)" class="py-1.5 px-2 bg-slate-950 hover:bg-brand-900/50 hover:border-brand-500/50 border border-slate-800 rounded-lg text-xs text-slate-300 transition text-center">
+                        <div class="font-bold text-emerald-400">30%</div>
+                        <div class="text-[10px] text-slate-500">මධ්‍යම</div>
+                    </button>
+                    <button onclick="setVolumePreset(1.00)" class="py-1.5 px-2 bg-slate-950 hover:bg-brand-900/50 hover:border-brand-500/50 border border-slate-800 rounded-lg text-xs text-slate-300 transition text-center">
+                        <div class="font-bold text-indigo-400">100%</div>
+                        <div class="text-[10px] text-slate-500">උපරිම</div>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Audio Output Device Picker (Earpiece / Speaker) -->
+            <div class="space-y-2 pt-2 border-t border-slate-800/60">
+                <label class="block text-xs font-medium text-slate-300">
+                    <i class="fa-solid fa-headphones mr-1 text-indigo-400"></i> ශ්‍රව්‍ය ප්‍රතිදාන උපකරණය (Audio Output Routing)
+                </label>
+                <div class="flex gap-2">
+                    <select id="audioOutputSelect" class="flex-1 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl p-3 outline-none focus:border-brand-500">
+                        <option value="default">Default Speaker / Earpiece</option>
+                    </select>
+                    <button onclick="refreshAudioDevices()" class="px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-xl border border-slate-700" title="උපකරණ ලැයිස්තුව Refresh කරන්න">
+                        <i class="fa-solid fa-arrows-rotate"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Sinhala User Help & Technical Tip Banner -->
+            <div class="bg-indigo-950/40 border border-indigo-800/40 rounded-xl p-3.5 flex items-start gap-3 text-xs text-indigo-200">
+                <i class="fa-solid fa-circle-info text-indigo-400 text-base mt-0.5 shrink-0"></i>
+                <div class="space-y-1">
+                    <p class="font-semibold text-indigo-100">දුරකථනයේ Speaker/Earpiece ශබ්දය පාලනය කිරීමේ උපදෙස්:</p>
+                    <p class="text-slate-300 leading-relaxed">
+                        බොහෝ ජංගම දුරකථන Browsers (iOS/Android) මගින් earpiece එක වෙත සෘජුවම ශබ්දය මාරු කිරීම බ්‍රවුසර ආරක්ෂණ නීති නිසා සීමා කර ඇත. එබැවින් Speaker එකෙන් සබ්දය අධික ලෙස ඇසෙන්නේ නම්, ඉහත ඇති <span class="text-brand-300 font-semibold">2%</span> හෝ <span class="text-brand-300 font-semibold">10% Gain</span> මට්ටම තෝරාගන්න. එමගින් සබ්දය කුඩා Whisper මට්ටමට සකසා ගත හැක.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Incoming Call Modal Banner -->
+    <div id="incomingCallModal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-slate-900 border border-slate-800 w-full max-w-sm rounded-2xl p-6 shadow-2xl text-center space-y-5">
+            <div class="w-16 h-16 bg-emerald-500/10 text-emerald-400 rounded-full flex items-center justify-center mx-auto border border-emerald-500/20 animate-pulse">
+                <i class="fa-solid fa-phone-incoming text-2xl"></i>
+            </div>
+
+            <div>
+                <h3 class="text-lg font-bold text-white">ලැබෙන ඇමතුමක්!</h3>
+                <p class="text-xs text-slate-400 mt-1" id="callerIdDisplay">Peer ID: -----</p>
+            </div>
+
+            <div class="flex items-center gap-3 pt-2">
+                <button onclick="rejectIncomingCall()" class="flex-1 py-3 bg-rose-600/20 border border-rose-500/30 text-rose-400 hover:bg-rose-600 hover:text-white rounded-xl text-sm font-medium transition active:scale-95">
+                    ප්‍රතික්ෂේප කරන්න
+                </button>
+                <button onclick="acceptIncomingCall()" class="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-sm font-medium transition shadow-lg shadow-emerald-600/30 active:scale-95">
+                    පිළිගන්න
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden Remote Audio Element -->
+    <audio id="remoteAudio" autoplay class="hidden"></audio>
+
+    <!-- Footer -->
+    <footer class="border-t border-slate-900 py-4 text-center text-xs text-slate-600">
+        Web Audio API & WebRTC Technology • Direct Peer-to-Peer Audio Call
+    </footer>
+
+    <script>
+        // Global variables state
+        let myPeerId = generateRandomId();
+        let peerConnection = null;
+        let localStream = null;
+        let remoteStream = null;
+        let broadcastChannel = null;
+
+        // Web Audio API State
+        let audioContext = null;
+        let gainNode = null;
+        let analyserNode = null;
+        let visualizerInterval = null;
+
+        // Timer State
+        let callStartTime = null;
+        let timerInterval = null;
+
+        // Pending Offer Storage
+        let pendingOfferData = null;
+
+        // DOM Elements
+        const myIdDisplay = document.getElementById('myIdDisplay');
+        const remoteIdInput = document.getElementById('remoteIdInput');
+        const statusText = document.getElementById('statusText');
+        const connectionStatusBadge = document.getElementById('connectionStatusBadge');
+        const activeCallCard = document.getElementById('activeCallCard');
+        const peerConnectedTitle = document.getElementById('peerConnectedTitle');
+        const peerConnectedId = document.getElementById('peerConnectedId');
+        const callTimer = document.getElementById('callTimer');
+        const gainSlider = document.getElementById('gainSlider');
+        const volumePercentage = document.getElementById('volumePercentage');
+        const remoteAudio = document.getElementById('remoteAudio');
+        const incomingCallModal = document.getElementById('incomingCallModal');
+        const callerIdDisplay = document.getElementById('callerIdDisplay');
+        const audioOutputSelect = document.getElementById('audioOutputSelect');
+        const toggleMicBtn = document.getElementById('toggleMicBtn');
+        const micIcon = document.getElementById('micIcon');
+        const pulseRing = document.getElementById('pulseRing');
+
+        // ICE Configuration
+        const rtcConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' }
+            ]
+        };
+
+        window.addEventListener('DOMContentLoaded', () => {
+            myIdDisplay.innerText = myPeerId;
+            initBroadcastChannel();
+            initAudioDevices();
+            checkWebSocketSupport();
+        });
+
+        function generateRandomId() {
+            return 'user-' + Math.floor(1000 + Math.random() * 9000);
+        }
+
+        function generateNewId() {
+            myPeerId = generateRandomId();
+            myIdDisplay.innerText = myPeerId;
+            showToast('නව ID එකක් සකස් කර ගන්නා ලදී!');
+        }
+
+        function checkWebSocketSupport() {
+            try {
+                // Testing if WebSocket is allowed in sandbox
+                const testSocket = new WebSocket('wss://echo.websocket.org');
+                testSocket.onerror = () => {};
+                setTimeout(() => { try { testSocket.close(); } catch(e){} }, 500);
+            } catch (err) {
+                if (err.name === 'SecurityError' || err.message.includes('Canvas')) {
+                    document.getElementById('canvasWarning').classList.remove('hidden');
+                }
+            }
+        }
+
+        function initBroadcastChannel() {
+            try {
+                broadcastChannel = new BroadcastChannel('audiocall_p2p_channel');
+                broadcastChannel.onmessage = async (event) => {
+                    const data = event.data;
+                    if (!data || !data.targetId) return;
+
+                    if (data.targetId === myPeerId) {
+                        if (data.type === 'OFFER') {
+                            pendingOfferData = data;
+                            callerIdDisplay.innerText = `Peer ID: ${data.senderId}`;
+                            incomingCallModal.classList.remove('hidden');
+                        } else if (data.type === 'ANSWER') {
+                            if (peerConnection) {
+                                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+                                showToast('ඇමතුම සම්බන්ධ විය!');
+                            }
+                        } else if (data.type === 'ICE') {
+                            if (peerConnection && data.candidate) {
+                                try {
+                                    await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                                } catch(e){}
+                            }
+                        } else if (data.type === 'END') {
+                            handleCallEnded();
+                        }
+                    }
+                };
+            } catch (e) {
+                console.log("BroadcastChannel not supported", e);
+            }
+        }
+
+        async function initiateCall() {
+            const remoteId = remoteIdInput.value.trim();
+            if (!remoteId) {
+                showToast('කරුණාකර අනෙක් කෙනාගේ ID එක ඇතුළත් කරන්න.');
+                return;
+            }
+
+            if (remoteId === myPeerId) {
+                showToast('ඔබගේම ID එකට ඇමතුම් ගත නොහැක!');
+                return;
+            }
+
+            updateConnectionBadge('සම්බන්ධ වෙමින්...', 'amber');
+
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                setupPeerConnection(remoteId);
+
+                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                // Broadcast local offer
+                if (broadcastChannel) {
+                    broadcastChannel.postMessage({
+                        type: 'OFFER',
+                        senderId: myPeerId,
+                        targetId: remoteId,
+                        offer: offer
+                    });
+                }
+
+                showToast('ඇමතුම් සංඥාව යවන ලදී. සම්බන්ධ වෙමින් පවතී...');
+            } catch (err) {
+                console.error("Call Setup Error:", err);
+                showToast('මයික්‍රෆෝනය සක්‍රීය කිරීමට නොහැකි විය.');
+                updateConnectionBadge('සූදානම්', 'emerald');
+            }
+        }
+
+        async function acceptIncomingCall() {
+            incomingCallModal.classList.add('hidden');
+            if (!pendingOfferData) return;
+
+            const remoteId = pendingOfferData.senderId;
+
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                setupPeerConnection(remoteId);
+
+                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(pendingOfferData.offer));
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+
+                if (broadcastChannel) {
+                    broadcastChannel.postMessage({
+                        type: 'ANSWER',
+                        senderId: myPeerId,
+                        targetId: remoteId,
+                        answer: answer
+                    });
+                }
+
+                showActiveCallUI(remoteId);
+                startTimer();
+                updateConnectionBadge('ඇමතුම සක්‍‍රීයයි', 'emerald');
+            } catch (err) {
+                console.error("Answer Call Error:", err);
+                showToast('ඇමතුම ලබාගැනීමට නොහැකි විය.');
+                rejectIncomingCall();
+            }
+        }
+
+        function rejectIncomingCall() {
+            incomingCallModal.classList.add('hidden');
+            if (pendingOfferData && broadcastChannel) {
+                broadcastChannel.postMessage({
+                    type: 'END',
+                    senderId: myPeerId,
+                    targetId: pendingOfferData.senderId
+                });
+            }
+            pendingOfferData = null;
+        }
+
+        function setupPeerConnection(targetRemoteId) {
+            if (peerConnection) {
+                try { peerConnection.close(); } catch(e){}
+            }
+
+            peerConnection = new RTCPeerConnection(rtcConfig);
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate && broadcastChannel) {
+                    broadcastChannel.postMessage({
+                        type: 'ICE',
+                        senderId: myPeerId,
+                        targetId: targetRemoteId,
+                        candidate: event.candidate
+                    });
+                }
+            };
+
+            peerConnection.ontrack = (event) => {
+                remoteStream = event.streams[0];
+                setupAudioNodes(remoteStream);
+                showActiveCallUI(targetRemoteId);
+                startTimer();
+                updateConnectionBadge('ඇමතුම සක්‍රීයයි', 'emerald');
+            };
+
+            peerConnection.onconnectionstatechange = () => {
+                if (peerConnection.connectionState === 'disconnected' || peerConnection.connectionState === 'failed') {
+                    handleCallEnded();
+                }
+            };
+        }
+
+        function setupAudioNodes(stream) {
+            try {
+                if (!audioContext) {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                }
+
+                if (audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+
+                const source = audioContext.createMediaStreamSource(stream);
+                
+                gainNode = audioContext.createGain();
+                gainNode.gain.value = parseFloat(gainSlider.value);
+
+                analyserNode = audioContext.createAnalyser();
+                analyserNode.fftSize = 32;
+
+                const destination = audioContext.createMediaStreamDestination();
+
+                source.connect(gainNode);
+                gainNode.connect(analyserNode);
+                gainNode.connect(destination);
+
+                remoteAudio.srcObject = destination.stream;
+                remoteAudio.play().catch(e => console.log("Audio playback:", e));
+
+                startVisualizer();
+            } catch (err) {
+                console.error("Audio API Setup fallback:", err);
+                remoteAudio.srcObject = stream;
+            }
+        }
+
+        function updateGain(value) {
+            const valNum = parseFloat(value);
+            volumePercentage.innerText = Math.round(valNum * 100) + '%';
+            
+            if (gainNode && audioContext) {
+                gainNode.gain.setValueAtTime(valNum, audioContext.currentTime);
+            }
+            remoteAudio.volume = valNum;
+        }
+
+        function setVolumePreset(value) {
+            gainSlider.value = value;
+            updateGain(value);
+        }
+
+        async function initAudioDevices() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+            try {
+                await navigator.mediaDevices.getUserMedia({ audio: true }).then(s => s.getTracks().forEach(t => t.stop())).catch(() => {});
+                refreshAudioDevices();
+            } catch (e) {}
+        }
+
+        async function refreshAudioDevices() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const audioOutputs = devices.filter(device => device.kind === 'audiooutput');
+
+            audioOutputSelect.innerHTML = '';
+            
+            if (audioOutputs.length === 0) {
+                const opt = document.createElement('option');
+                opt.value = 'default';
+                opt.text = 'Default Audio Output';
+                audioOutputSelect.appendChild(opt);
+                return;
+            }
+
+            audioOutputs.forEach((device, index) => {
+                const option = document.createElement('option');
+                option.value = device.deviceId;
+                let label = device.label || `Audio Output ${index + 1}`;
+                if (label.toLowerCase().includes('earpiece') || label.toLowerCase().includes('receiver')) {
+                    label = `📱 Earpiece: ${label}`;
+                } else if (label.toLowerCase().includes('head')) {
+                    label = `🎧 Headset: ${label}`;
+                } else {
+                    label = `🔊 Speaker: ${label}`;
+                }
+                option.text = label;
+                audioOutputSelect.appendChild(option);
+            });
+        }
+
+        audioOutputSelect.addEventListener('change', async (e) => {
+            const deviceId = e.target.value;
+            if (typeof remoteAudio.setSinkId === 'function') {
+                try {
+                    await remoteAudio.setSinkId(deviceId);
+                    showToast('ශ්‍රව්‍ය ප්‍රතිදානය සාර්ථකව වෙනස් විය.');
+                } catch (err) {
+                    showToast('ශ්‍රව්‍ය ප්‍රතිදානය මාරු කිරීම බ්‍රවුසරය මගින් සීමා කර ඇත.');
+                }
+            } else {
+                showToast('ඔබගේ බ්‍රවුසරය setSinkId සහාය නොදක්වයි. Gain Slider එක භාවිතා කරන්න.');
+            }
+        });
+
+        function toggleManualSignalDrawer() {
+            const drawer = document.getElementById('manualSignalDrawer');
+            const icon = document.getElementById('manualDrawerIcon');
+            drawer.classList.toggle('hidden');
+            icon.classList.toggle('fa-chevron-up');
+            icon.classList.toggle('fa-chevron-down');
+        }
+
+        async function createManualOffer() {
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                setupPeerConnection('manual-peer');
+                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                const token = btoa(JSON.stringify(offer));
+                document.getElementById('manualTokenBox').value = token;
+                showToast('Call Code එක සාදන ලදී! එය කොපි කර අනෙක් කෙනාට යවන්න.');
+            } catch(e) {
+                showToast('Call Code සාදගැනීමට නොහැකි විය.');
+            }
+        }
+
+        async function pasteManualAnswer() {
+            const token = document.getElementById('manualTokenBox').value.trim();
+            if (!token) {
+                showToast('කරුණාකර Token එකක් ඇතුළත් කරන්න.');
+                return;
+            }
+
+            try {
+                const parsed = JSON.parse(atob(token));
+                if (parsed.type === 'offer') {
+                    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    setupPeerConnection('manual-peer');
+                    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(parsed));
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+
+                    document.getElementById('manualTokenBox').value = btoa(JSON.stringify(answer));
+                    showToast('Answer Token එක සැකසුණි! මෙය නැවත පළමු කෙනා වෙත යවන්න.');
+                } else if (parsed.type === 'answer') {
+                    if (peerConnection) {
+                        await peerConnection.setRemoteDescription(new RTCSessionDescription(parsed));
+                        showToast('Manual connection සාර්ථක විය!');
+                    }
+                }
+            } catch(e) {
+                showToast('වලංගු නොවන Call Code එකකි.');
+            }
+        }
+
+        function endCall() {
+            if (peerConnection) {
+                try { peerConnection.close(); } catch(e){}
+                peerConnection = null;
+            }
+            handleCallEnded();
+        }
+
+        function handleCallEnded() {
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+            if (remoteStream) {
+                remoteStream.getTracks().forEach(track => track.stop());
+                remoteStream = null;
+            }
+
+            stopTimer();
+            stopVisualizer();
+
+            activeCallCard.classList.add('hidden');
+            updateConnectionBadge('සූදානම්', 'emerald');
+            showToast('ඇමතුම විසන්ධි විය.');
+        }
+
+        function toggleMute() {
+            if (!localStream) return;
+            const audioTrack = localStream.getAudioTracks()[0];
+            if (audioTrack) {
+                audioTrack.enabled = !audioTrack.enabled;
+                if (audioTrack.enabled) {
+                    toggleMicBtn.classList.remove('bg-rose-600', 'text-white');
+                    toggleMicBtn.classList.add('bg-slate-800', 'text-slate-200');
+                    micIcon.className = 'fa-solid fa-microphone';
+                    showToast('මයික්‍රෆෝනය Unmute විය.');
+                } else {
+                    toggleMicBtn.classList.remove('bg-slate-800', 'text-slate-200');
+                    toggleMicBtn.classList.add('bg-rose-600', 'text-white');
+                    micIcon.className = 'fa-solid fa-microphone-slash';
+                    showToast('මයික්‍රෆෝනය Mute විය.');
+                }
+            }
+        }
+
+        function showActiveCallUI(peerId) {
+            peerConnectedTitle.innerText = "සම්බන්ධ වී ඇත";
+            peerConnectedId.innerText = `Peer ID: ${peerId}`;
+            activeCallCard.classList.remove('hidden');
+            pulseRing.classList.remove('hidden');
+        }
+
+        function startTimer() {
+            stopTimer();
+            callStartTime = Date.now();
+            timerInterval = setInterval(() => {
+                const elapsedSeconds = Math.floor((Date.now() - callStartTime) / 1000);
+                const mins = String(Math.floor(elapsedSeconds / 60)).padStart(2, '0');
+                const secs = String(elapsedSeconds % 60).padStart(2, '0');
+                callTimer.innerText = `${mins}:${secs}`;
+            }, 1000);
+        }
+
+        function stopTimer() {
+            if (timerInterval) clearInterval(timerInterval);
+            callTimer.innerText = "00:00";
+        }
+
+        function startVisualizer() {
+            stopVisualizer();
+            const bars = [
+                document.getElementById('bar1'),
+                document.getElementById('bar2'),
+                document.getElementById('bar3'),
+                document.getElementById('bar4'),
+                document.getElementById('bar5')
+            ];
+
+            const dataArray = new Uint8Array(analyserNode.frequencyBinCount);
+
+            visualizerInterval = setInterval(() => {
+                if (!analyserNode) return;
+                analyserNode.getByteFrequencyData(dataArray);
+
+                let sum = 0;
+                for (let i = 0; i < dataArray.length; i++) {
+                    sum += dataArray[i];
+                }
+                const avg = sum / dataArray.length;
+
+                bars.forEach((bar, index) => {
+                    const factor = (index + 1) * 3;
+                    const h = Math.min(28, Math.max(4, (avg / 255) * 30 + (Math.random() * factor)));
+                    bar.style.height = `${h}px`;
+                });
+            }, 80);
+        }
+
+        function stopVisualizer() {
+            if (visualizerInterval) clearInterval(visualizerInterval);
+            pulseRing.classList.add('hidden');
+        }
+
+        function copyMyId() {
+            if (!myPeerId) return;
+            const textToCopy = myPeerId;
+            const el = document.createElement('textarea');
+            el.value = textToCopy;
+            document.body.appendChild(el);
+            el.select();
+            document.execCommand('copy');
+            document.body.removeChild(el);
+            showToast('ID එක කොපි කරගන්නා ලදී!');
+        }
+
+        function updateConnectionBadge(text, color) {
+            statusText.innerText = text;
+            connectionStatusBadge.className = `inline-flex items-center px-3 py-1 rounded-full text-xs font-medium border bg-${color}-500/10 text-${color}-400 border-${color}-500/20`;
+        }
+
+        function showToast(message) {
+            const toast = document.createElement('div');
+            toast.className = 'fixed bottom-5 right-5 bg-slate-800 text-slate-100 border border-slate-700 px-4 py-3 rounded-xl shadow-2xl text-xs z-50 transition-all duration-300 opacity-0 transform translate-y-2 flex items-center gap-2';
+            toast.innerHTML = `<i class="fa-solid fa-bell text-brand-400"></i> <span>${message}</span>`;
+            document.body.appendChild(toast);
+
+            setTimeout(() => {
+                toast.classList.remove('opacity-0', 'translate-y-2');
+            }, 10);
+
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'translate-y-2');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
