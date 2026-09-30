@@ -7,7 +7,7 @@
   
   <!-- Disguised Title for Browser & App History Privacy -->
   <title>Snake 🐍</title>
-  <!-- Chat build: Google Meet launch + immediate Snake cover on background + text-size / pinch zoom -->
+  <!-- Chat build: outgoing send animation + per-message secret Snake alerts + Google Meet / automatic lock -->
 
   <!-- PWA Standalone Meta Tags for iOS / Android Native Display -->
   <meta name="mobile-web-app-capable" content="yes" />
@@ -112,8 +112,25 @@
       100% { opacity: 1; transform: translateY(0) scale(1); }
     }
 
+    /* A fresh outgoing bubble rises smoothly from the composer and settles in place. */
+    .outgoing-message-send {
+      animation: outgoingMessageSend .34s cubic-bezier(.2,0,0,1) both;
+      transform-origin: right bottom;
+      will-change: transform, opacity;
+    }
+    @keyframes outgoingMessageSend {
+      0% { opacity: 0; transform: translate3d(8px,20px,0) scale(.92); }
+      72% { opacity: 1; transform: translate3d(0,-1px,0) scale(1.008); }
+      100% { opacity: 1; transform: translate3d(0,0,0) scale(1); }
+    }
+    .snake-alert-arrive { animation: snakeAlertArrive .26s ease-out both; }
+    @keyframes snakeAlertArrive {
+      from { opacity: 0; transform: translateY(-6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
     @media (prefers-reduced-motion: reduce) {
-      .typing-dot, .incoming-message-pop { animation: none !important; }
+      .typing-dot, .incoming-message-pop, .outgoing-message-send, .snake-alert-arrive { animation: none !important; }
     }
 
     .message-meta {
@@ -209,8 +226,8 @@
         </div>
       </div>
 
-      <!-- Generic decoy incoming-message indicator. Never opens chat when tapped. -->
-      <div id="snakeMessageNotice" class="hidden absolute top-[108px] left-4 right-4 z-30 rounded-2xl border border-slate-700 bg-slate-900/95 backdrop-blur-md px-4 py-3 shadow-xl">
+      <!-- One discreet alert card; each distinct new message refreshes the snake/dot animation. -->
+      <div id="snakeMessageNotice" role="status" aria-live="polite" class="hidden absolute top-[108px] left-4 right-4 z-30 rounded-2xl border border-slate-700 bg-slate-900/95 backdrop-blur-md px-4 py-3 shadow-xl">
         <div class="flex items-center gap-3">
           <div class="snake-notice-track" aria-hidden="true">
             <span class="snake-notice-snake">🐍</span>
@@ -741,7 +758,26 @@
     let reactionTargetMsgId = null;
     let visibleDeleteMsgId = null;
     let partnerTypingActive = false;
-    let pendingIncomingAnimationId = null;
+    const messageAnimations = new Map();
+    function queueMessageAnimation(message, direction) {
+      if (!message || !message.id || !isChatScreenVisible()) return;
+      messageAnimations.set(message.id, { direction, startedAt:null });
+    }
+    function applyMessageAnimation(row, message, isMine) {
+      const animation = messageAnimations.get(message.id);
+      if (!animation) return;
+      const duration = animation.direction === 'outgoing' ? 340 : 280;
+      const now = performance.now();
+      if (animation.startedAt === null) animation.startedAt = now;
+      const elapsed = now - animation.startedAt;
+      if (elapsed >= duration || message.deleted || isMine !== (animation.direction === 'outgoing')) {
+        messageAnimations.delete(message.id);
+        return;
+      }
+      row.classList.add(isMine ? 'outgoing-message-send' : 'incoming-message-pop');
+      // Delivery/Seen re-renders continue the original animation instead of replaying it.
+      row.style.animationDelay = `${-elapsed}ms`;
+    }
     let stickerPanelMode = 'mine';
     let currentStickerPackPage = 0;
     let stickerManageMode = false;
@@ -895,7 +931,10 @@
           { type: 'NEW_MESSAGE', message: msg },
           msg.id
         );
-        if (ok) msg.sent = true;
+        if (ok) {
+          msg.sent = true;
+          triggerSecretAndroidPush(rememberedUser.partnerId, rememberedUser.id, msg.id);
+        }
       }
 
       if (pending.length) await saveMessagesToStorage();
@@ -947,13 +986,14 @@
           // but never Seen. Seen is reserved for the actual chat screen.
           if (payload.type === 'NEW_MESSAGE' && payload.message && payload.message.receiverId === rememberedId) {
             const incoming = payload.message;
-            if (!messages.some(m => m.id === incoming.id)) {
+            const isNewLocal = !messages.some(m => m.id === incoming.id);
+            if (isNewLocal) {
               messages.push(incoming);
               messages.sort((a,b) => a.timestamp - b.timestamp);
               await saveMessagesToStorage();
             }
 
-            showSnakeMessageNoticeOnce(rememberedId);
+            if (isNewLocal) handleSecretIncomingAlert(incoming, rememberedId);
 
             // Receiver app is open, so tell the sender this message reached the phone.
             await sendCoverDeliveryAck(
@@ -1108,6 +1148,57 @@
     let firebaseClientApp = null;
     let firebaseMessagingClient = null;
     let firebaseForegroundListenerBound = false;
+    const SECRET_NOTIFICATION_TAG = 'snake-bonus-alert';
+    const pushRequestsInFlight = new Set();
+
+    function handleSecretPushHint(data = {}) {
+      const userId = currentOrLastUserId();
+      if (!userId || isChatScreenVisible()) return;
+      const recipient = data.targetUserId || data.userId;
+      if (recipient && recipient !== userId) return;
+      const alertId = data.messageId || data.fcmMessageId || data.alertId;
+      // A push is only a generic hint. Actual messages and Seen still come from MQTT/storage.
+      showSnakeMessageNoticeOnce(userId, alertId ? String(alertId) : 'push_' + Date.now());
+    }
+
+    function setupSecretPushBridge() {
+      if (!('serviceWorker' in navigator)) return;
+      navigator.serviceWorker.addEventListener('message', event => {
+        const data = event.data;
+        if (data && data.type === 'SNAKE_SECRET_PUSH') handleSecretPushHint(data);
+      });
+    }
+
+    async function showSecretSystemNotification(messageId, userId) {
+      if (!document.hidden || !('Notification' in window) || Notification.permission !== 'granted') return;
+      try {
+        const reg = await getSnakeServiceWorkerRegistration();
+        if (!document.hidden || isChatScreenVisible()) return;
+        const active = await reg.getNotifications({ tag:SECRET_NOTIFICATION_TAG });
+        if (active.some(notification => notification.data && notification.data.messageId === messageId)) return;
+        if (!document.hidden || isChatScreenVisible()) return;
+        await reg.showNotification('Snake 🐍', {
+          body:'Bonus alert • Keep playing',
+          tag:SECRET_NOTIFICATION_TAG, renotify:true,
+          icon:'/snake-alert-icon.png', badge:'/snake-alert-badge.png',
+          vibrate:[45,35,65],
+          data:{ type:'snake-bonus', messageId, userId }
+        });
+      } catch(e) { /* FCM still handles closed-app delivery when its worker is configured. */ }
+    }
+
+    async function clearSecretSystemNotifications(userId = null) {
+      if (!('serviceWorker' in navigator)) return;
+      try {
+        const reg = window.__snakePushSwRegistration || await navigator.serviceWorker.getRegistration('/');
+        if (!reg) return;
+        const active = await reg.getNotifications({ tag:SECRET_NOTIFICATION_TAG });
+        active.forEach(notification => {
+          if (!userId || !notification.data || !notification.data.userId || notification.data.userId === userId) notification.close();
+        });
+        if (reg.active) reg.active.postMessage({ type:'SNAKE_CLEAR_ALERT', userId });
+      } catch(e) {}
+    }
 
     function firebaseConfigReady() {
       const c = window.SNAKE_FIREBASE_CONFIG;
@@ -1122,10 +1213,9 @@
       if (!firebaseMessagingClient) firebaseMessagingClient = getMessaging(firebaseClientApp);
       if (!firebaseForegroundListenerBound) {
         firebaseForegroundListenerBound = true;
-        onMessage(firebaseMessagingClient, () => {
-          // No Android system notification while the app is foreground.
-          // Existing in-app Snake notice/MQTT behavior remains responsible for foreground alerts.
-        });
+        onMessage(firebaseMessagingClient, payload => handleSecretPushHint({
+          ...(payload.data || {}), fcmMessageId:payload.messageId
+        }));
       }
       return firebaseMessagingClient;
     }
@@ -1133,14 +1223,14 @@
     async function getSnakeServiceWorkerRegistration() {
       if (!('serviceWorker' in navigator)) throw new Error('Service workers not supported');
       let reg = window.__snakePushSwRegistration;
-      if (!reg) reg = await navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope: '/' });
+      if (!reg) reg = await navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope:'/', updateViaCache:'none' });
       await navigator.serviceWorker.ready;
       window.__snakePushSwRegistration = reg;
       return reg;
     }
 
-    async function registerCurrentPushToken(showResult = false) {
-      if (!currentUser) throw new Error('Unlock chat first');
+    async function registerCurrentPushToken(showResult = false, registeringUser = currentUser) {
+      if (!registeringUser) throw new Error('Unlock chat first');
       if (!firebaseConfigReady()) throw new Error('Firebase config is not set yet');
       if (Notification.permission !== 'granted') throw new Error('Notification permission is not granted');
 
@@ -1155,17 +1245,19 @@
       const response = await fetch('/.netlify/functions/register-push', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: currentUser.id, token })
+        body: JSON.stringify({ userId:registeringUser.id, token })
       });
       if (!response.ok) throw new Error('Push registration failed');
       localStorage.setItem(SECRET_PUSH_ENABLED_KEY, '1');
-      if (showResult) showToast('Secret Android alerts enabled');
+      if (showResult) showToast(isChatScreenVisible() ? 'Secret Android alerts enabled' : 'Alerts enabled');
       return true;
     }
 
     async function enableSecretAndroidAlerts() {
       hideAppMenu();
+      const registeringUser = currentUser;
       try {
+        if (!registeringUser) throw new Error('Unlock chat first');
         if (!('Notification' in window)) throw new Error('Notifications are not supported');
         const permission = Notification.permission === 'granted'
           ? 'granted'
@@ -1174,7 +1266,7 @@
           showToast('Notification permission not allowed');
           return;
         }
-        await registerCurrentPushToken(true);
+        await registerCurrentPushToken(true, registeringUser);
       } catch (err) {
         showToast(err && err.message ? err.message : 'Could not enable alerts');
       }
@@ -1183,20 +1275,29 @@
     async function refreshSecretPushRegistration() {
       if (!currentUser) return;
       if (localStorage.getItem(SECRET_PUSH_ENABLED_KEY) !== '1') return;
-      if (Notification.permission !== 'granted' || !firebaseConfigReady()) return;
+      if (!('Notification' in window) || Notification.permission !== 'granted' || !firebaseConfigReady()) return;
       try { await registerCurrentPushToken(false); } catch (e) {}
     }
 
-    async function triggerSecretAndroidPush(targetUserId) {
-      if (!targetUserId || !currentUser) return;
+    async function triggerSecretAndroidPush(targetUserId, senderId = currentUser && currentUser.id, messageId = null) {
+      if (!targetUserId || !senderId) return false;
+      const message = messageId && messages.find(item => item.id === messageId && item.senderId === senderId);
+      if (message && message.pushRequested) return true;
+      const requestKey = `${senderId}:${messageId || targetUserId}`;
+      if (pushRequestsInFlight.has(requestKey)) return false;
+      pushRequestsInFlight.add(requestKey);
       try {
-        await fetch('/.netlify/functions/send-push', {
+        const response = await fetch('/.netlify/functions/send-push', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ senderId: currentUser.id, targetUserId }),
+          body: JSON.stringify({ senderId, targetUserId, messageId }),
           keepalive: true
         });
-      } catch (e) {}
+        if (!response.ok) return false;
+        if (message) { message.pushRequested = true; await saveMessagesToStorage(); }
+        return true;
+      } catch(e) { return false; }
+      finally { pushRequestsInFlight.delete(requestKey); }
     }
 
     async function flushPendingOutgoingMessagesLive() {
@@ -1265,7 +1366,7 @@
 
       // FCM push contains no chat text/name; it only wakes the Android notification service worker.
       if (payload && payload.type === 'NEW_MESSAGE' && targetUserId && published) {
-        triggerSecretAndroidPush(targetUserId);
+        triggerSecretAndroidPush(targetUserId, payload.message.senderId, payload.message.id);
       }
 
       return published;
@@ -1322,18 +1423,17 @@
           messages.sort((a,b) => a.timestamp - b.timestamp);
           await saveMessagesToStorage();
         }
+        const alertUserId = currentOrLastUserId();
+        if (isNewLocal && incoming && incoming.receiverId === alertUserId) handleSecretIncomingAlert(incoming, alertUserId);
 
         if (currentUser && incoming && incoming.receiverId === currentUser.id) {
           // Show the message first so receiving feels instant.
           if (isChatScreenVisible()) {
             if (isNewLocal && incoming.senderId === currentUser.partnerId) {
-              pendingIncomingAnimationId = incoming.id;
+              queueMessageAnimation(incoming, 'incoming');
             }
             renderMessages();
             clearSnakeMessageNotice();
-          } else if (incoming.senderId === currentUser.partnerId) {
-            // Snake screen only: alert, but do not mark Seen.
-            showSnakeMessageNoticeOnce();
           }
 
           // App received it = Delivered. Send receipt without blocking the UI.
@@ -1493,6 +1593,7 @@
       // Register lifecycle protection before storage or encryption can delay startup.
       setupAutoLockListeners();
       setupFilePickerPrivacy();
+      setupSecretPushBridge();
       initSnakeGame();
       setupSecretTrigger();
       initPwaCapabilities();
@@ -1951,18 +2052,51 @@
       return `snake_generic_notice_active_${id}`;
     }
 
-    function showSnakeMessageNoticeOnce(userId = null) {
+    let lastSecretVibrationAt = 0;
+
+    function handleSecretIncomingAlert(message, userId) {
+      const user = getUserConfigById(userId);
+      if (!user || !message || message.receiverId !== user.id || message.senderId !== user.partnerId || message.seen || message.deleted || isChatScreenVisible()) return;
+      if (showSnakeMessageNoticeOnce(userId, message.id) && document.hidden) showSecretSystemNotification(message.id, userId);
+    }
+
+    function showSnakeMessageNoticeOnce(userId = null, messageId = null) {
       const id = userId || (currentUser && currentUser.id) || localStorage.getItem('snake_last_unlocked_user_id');
-      if (!id) return;
+      if (!id || isChatScreenVisible()) return false;
       const notice = document.getElementById('snakeMessageNotice');
       const cover = document.getElementById('coverScreen');
-      if (!notice || !cover || cover.classList.contains('hidden')) return;
+      if (!notice || !cover || cover.classList.contains('hidden')) return false;
       const key = snakeNoticeStorageKey(id);
-      if (localStorage.getItem(key) === '1') return;
-      localStorage.setItem(key, '1');
+      const idsKey = `snake_generic_notice_ids_${id}`;
+      let notifiedIds = [];
+      try { notifiedIds = JSON.parse(localStorage.getItem(idsKey) || '[]'); } catch(e) {}
+      if (!Array.isArray(notifiedIds)) notifiedIds = [];
+      if (!messageId) {
+        if (localStorage.getItem(key) === '1') { notice.classList.remove('hidden'); return false; }
+        const newest = [...messages].reverse().find(message => message.receiverId === id && !message.seen && !message.deleted);
+        if (!newest) return false;
+        messageId = newest.id;
+      }
+      if (notifiedIds.includes(messageId)) return false;
+      notifiedIds.push(messageId);
+      try {
+        localStorage.setItem(idsKey, JSON.stringify(notifiedIds.slice(-100)));
+        localStorage.setItem(key, '1');
+      } catch(e) {}
       notice.classList.remove('hidden');
-      // Short, discreet vibration. Browsers may require a prior user gesture on some phones.
-      if (navigator.vibrate) { try { navigator.vibrate([45, 35, 65]); } catch(e){} }
+      // Refresh the card for every new message, keeping just one visible alert.
+      notice.classList.remove('snake-alert-arrive');
+      void notice.offsetWidth;
+      notice.classList.add('snake-alert-arrive');
+      const track = notice.querySelector('.snake-notice-track');
+      if (track && typeof track.getAnimations === 'function') track.getAnimations({ subtree:true }).forEach(animation => { animation.currentTime = 0; });
+      notice.dataset.alertId = messageId;
+      // Coalesce simultaneous MQTT/push arrivals while retaining their separate alert IDs.
+      if (!document.hidden && navigator.vibrate && Date.now() - lastSecretVibrationAt > 900) {
+        lastSecretVibrationAt = Date.now();
+        try { navigator.vibrate([45,35,65]); } catch(e) {}
+      }
+      return true;
     }
 
     function hasUnreadMessagesForUser(userId = null) {
@@ -1992,6 +2126,7 @@
       if (notice) notice.classList.add('hidden');
       const id = (currentUser && currentUser.id) || localStorage.getItem('snake_last_unlocked_user_id');
       if (id) localStorage.removeItem(snakeNoticeStorageKey(id));
+      clearSecretSystemNotifications(id);
     }
     window.clearSnakeMessageNotice = clearSnakeMessageNotice;
 
@@ -2019,6 +2154,7 @@
       const client = mqttClient;
       mqttClient = null;
       currentUser = null;
+      messageAnimations.clear();
 
       // Conceal the UI first. Storage/network errors must never prevent the cover.
       document.querySelectorAll('#appContainer > [id$="Modal"], #chatScreen, #pinScreen, #highScoreScreen, #reactionPicker, #appMenu').forEach(el => {
@@ -2602,8 +2738,8 @@
       messages.forEach(msg => {
         const isMine = msg.senderId === currentUser.id;
         const msgDiv = document.createElement('div');
-        const animateIncoming = !isMine && msg.id === pendingIncomingAnimationId;
-        msgDiv.className = `flex flex-col ${isMine ? 'items-end' : 'items-start'} my-1 touch-pan-y${animateIncoming ? ' incoming-message-pop' : ''}`;
+        msgDiv.className = `flex flex-col ${isMine ? 'items-end' : 'items-start'} my-1 touch-pan-y`;
+        applyMessageAnimation(msgDiv, msg, isMine);
         msgDiv.dataset.messageId = msg.id;
 
         let contentHTML = '';
@@ -2696,8 +2832,6 @@
       const typingEl = ensureTypingIndicatorInMessages();
       if (typingEl) typingEl.classList.toggle('hidden', !partnerTypingActive);
 
-      // The animation is one-shot. A normal re-render must not replay it.
-      pendingIncomingAnimationId = null;
       scrollChatToLatest();
     }
 
@@ -2836,10 +2970,11 @@
       const newMsg = { id:'msg_'+Date.now()+'_'+Math.random().toString(16).slice(2,6), senderId:currentUser.id, receiverId:currentUser.partnerId, type:'sticker', stickerKind:kind, content, replyTo: activeReply ? {...activeReply} : null, timestamp:Date.now(), seen: false, sent: false, delivered: false };
       messages.push(newMsg);
       await saveMessagesToStorage();
+      queueMessageAnimation(newMsg, 'outgoing');
       renderMessages();
       cancelReply();
       toggleStickerPanel(false);
-      sendNetworkPayload({ type:'NEW_MESSAGE', message:newMsg }, currentUser.partnerId, true);
+      sendNetworkPayload({ type:'NEW_MESSAGE', message:newMsg }, newMsg.receiverId, true);
     }
 
     function imageFileToSticker(file) {
@@ -3076,7 +3211,7 @@
       try { input.focus({ preventScroll: true }); } catch(e) { input.focus(); }
 
       const newMsg = {
-        id: 'msg_' + Date.now(),
+        id: 'msg_' + Date.now() + '_' + Math.random().toString(16).slice(2,6),
         senderId: currentUser.id,
         receiverId: currentUser.partnerId,
         type: 'text',
@@ -3088,6 +3223,7 @@
 
       messages.push(newMsg);
       await saveMessagesToStorage();
+      queueMessageAnimation(newMsg, 'outgoing');
       renderMessages();
 
       input.value = '';
@@ -3100,9 +3236,9 @@
       const micBtn = document.getElementById('recordVoiceBtn');
       if (sendBtn) sendBtn.classList.add('hidden');
       if (micBtn) micBtn.classList.remove('hidden');
-      try { input.focus({ preventScroll: true }); } catch(e) { input.focus(); }
+      if (isChatScreenVisible()) { try { input.focus({ preventScroll: true }); } catch(e) { input.focus(); } }
 
-      sendNetworkPayload({ type: 'NEW_MESSAGE', message: newMsg }, currentUser.partnerId, true);
+      sendNetworkPayload({ type: 'NEW_MESSAGE', message: newMsg }, newMsg.receiverId, true);
     }
 
     async function startVoiceRecord() {
@@ -3154,7 +3290,8 @@
     }
 
     function stopAndSendVoiceRecord() {
-      if (!mediaRecorder) return;
+      if (!mediaRecorder || !currentUser) return;
+      const sendingUser = currentUser;
 
       mediaRecorder.onstop = () => {
         const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
@@ -3166,8 +3303,8 @@
 
           const newMsg = {
             id: 'msg_' + Date.now(),
-            senderId: currentUser.id,
-            receiverId: currentUser.partnerId,
+            senderId: sendingUser.id,
+            receiverId: sendingUser.partnerId,
             type: 'voice',
             content: base64Audio,
             duration: durationStr,
@@ -3178,9 +3315,10 @@
 
           messages.push(newMsg);
           await saveMessagesToStorage();
+          queueMessageAnimation(newMsg, 'outgoing');
           renderMessages();
 
-          sendNetworkPayload({ type: 'NEW_MESSAGE', message: newMsg }, currentUser.partnerId, true);
+          sendNetworkPayload({ type: 'NEW_MESSAGE', message: newMsg }, newMsg.receiverId, true);
           cancelReply();
         };
 
@@ -3332,8 +3470,8 @@
 
     function initPwaCapabilities() {
       if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope: '/' })
-          .then(reg => { window.__snakePushSwRegistration = reg; })
+        navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope:'/', updateViaCache:'none' })
+          .then(reg => { window.__snakePushSwRegistration = reg; reg.update().catch(() => {}); })
           .catch(() => {});
       }
 
@@ -3799,10 +3937,11 @@
       };
       messages.push(m);
       await saveMessagesToStorage();
+      queueMessageAnimation(m, 'outgoing');
       renderMessages();
       cancelReply();
-      clearPendingFileDraft(currentUser.id);
-      sendNetworkPayload({type:'NEW_MESSAGE', message:m}, currentUser.partnerId, true);
+      clearPendingFileDraft(m.senderId);
+      sendNetworkPayload({type:'NEW_MESSAGE', message:m}, m.receiverId, true);
       showToast(draft.type === 'image' ? 'Photo sent' : 'File sent');
     }
 
@@ -3814,8 +3953,8 @@
         showToast('Preparing file…');
         const content = await readFileAsDataURL(file);
         const m = { id:'msg_'+Date.now()+'_'+Math.random().toString(16).slice(2,6), senderId:currentUser.id, receiverId:currentUser.partnerId, type:'file', content, fileName:file.name || 'File', fileType:file.type || 'application/octet-stream', fileSize:file.size || 0, replyTo:activeReply?{...activeReply}:null, timestamp:Date.now(), seen: false, sent: false, delivered: false };
-        messages.push(m); await saveMessagesToStorage(); renderMessages(); cancelReply();
-        sendNetworkPayload({type:'NEW_MESSAGE', message:m}, currentUser.partnerId, true);
+        messages.push(m); await saveMessagesToStorage(); queueMessageAnimation(m, 'outgoing'); renderMessages(); cancelReply();
+        sendNetworkPayload({type:'NEW_MESSAGE', message:m}, m.receiverId, true);
       } catch(e) { showToast('Could not send file'); }
     }
 
@@ -3850,7 +3989,7 @@
     }
     async function sendPhotoFile(file) {
       if(!currentUser||!file) return;
-      try { showToast('Preparing photo…'); const content=await compressPhotoFile(file); const m={id:'msg_'+Date.now()+'_'+Math.random().toString(16).slice(2,6),senderId:currentUser.id,receiverId:currentUser.partnerId,type:'image',content,replyTo:activeReply?{...activeReply}:null,timestamp:Date.now(),seen: false, sent: false, delivered: false}; messages.push(m); await saveMessagesToStorage(); renderMessages(); cancelReply(); sendNetworkPayload({type:'NEW_MESSAGE',message:m},currentUser.partnerId,true); }
+      try { showToast('Preparing photo…'); const content=await compressPhotoFile(file); const m={id:'msg_'+Date.now()+'_'+Math.random().toString(16).slice(2,6),senderId:currentUser.id,receiverId:currentUser.partnerId,type:'image',content,replyTo:activeReply?{...activeReply}:null,timestamp:Date.now(),seen: false, sent: false, delivered: false}; messages.push(m); await saveMessagesToStorage(); queueMessageAnimation(m, 'outgoing'); renderMessages(); cancelReply(); sendNetworkPayload({type:'NEW_MESSAGE',message:m},m.receiverId,true); }
       catch(e){showToast(e.message==='Photo too large'?'Photo too large':'Could not send photo');}
     }
     let previewPhotoMsgId=null;
