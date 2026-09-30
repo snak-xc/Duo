@@ -104,7 +104,7 @@
 
     /* Only a newly-arrived partner message gets this animation. */
     .incoming-message-pop {
-      animation: incomingMessagePop .28s cubic-bezier(.2,.9,.25,1.15) both;
+      animation: incomingMessagePop .60s cubic-bezier(.2,.9,.25,1.15) both;
       transform-origin: left bottom;
     }
     @keyframes incomingMessagePop {
@@ -114,7 +114,7 @@
 
     /* A fresh outgoing bubble rises smoothly from the composer and settles in place. */
     .outgoing-message-send {
-      animation: outgoingMessageSend .34s cubic-bezier(.2,0,0,1) both;
+      animation: outgoingMessageSend .70s cubic-bezier(.2,0,0,1) both;
       transform-origin: right bottom;
       will-change: transform, opacity;
     }
@@ -766,7 +766,7 @@
     function applyMessageAnimation(row, message, isMine) {
       const animation = messageAnimations.get(message.id);
       if (!animation) return;
-      const duration = animation.direction === 'outgoing' ? 340 : 280;
+      const duration = animation.direction === 'outgoing' ? 700 : 600;
       const now = performance.now();
       if (animation.startedAt === null) animation.startedAt = now;
       const elapsed = now - animation.startedAt;
