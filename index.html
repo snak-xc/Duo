@@ -7,7 +7,7 @@
   
   <!-- Disguised Title for Browser & App History Privacy -->
   <title>Snake 🐍</title>
-  <!-- Chat build: outgoing send animation + per-message secret Snake alerts + Google Meet / automatic lock -->
+  <!-- Chat build: scoped Seen receipts + stable history scroll + outside-tap sticker dismissal -->
 
   <!-- PWA Standalone Meta Tags for iOS / Android Native Display -->
   <meta name="mobile-web-app-capable" content="yes" />
@@ -162,6 +162,7 @@
       font-size: var(--chat-text-size) !important;
       line-height: 1.45 !important;
     }
+    #messagesContainer { min-height: 0; overflow-anchor: none; }
 
     #messageInput {
       font-size: var(--chat-text-size) !important;
@@ -410,7 +411,7 @@
         </button>
       </div>
 
-      <main id="messagesContainer" class="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-950">
+      <main id="messagesContainer" class="flex-1 min-h-0 overflow-y-auto p-4 space-y-3 bg-slate-950">
         <!-- Messages dynamically inserted here -->
       </main>
 
@@ -435,7 +436,7 @@
           <button onclick="cancelReply()" class="w-8 h-8 rounded-full text-slate-400 active:bg-slate-800"><i class="fa-solid fa-xmark"></i></button>
         </div>
       </div>
-      <div id="stickerPanel" class="hidden bg-slate-900 border-t border-slate-800 px-3 pt-3 pb-2 max-h-64 overflow-y-auto">
+      <div id="stickerPanel" class="hidden shrink-0 bg-slate-900 border-t border-slate-800 px-3 pt-3 pb-2 max-h-64 overflow-y-auto">
         <div class="flex items-center justify-between mb-2">
           <div class="flex gap-2">
             <button type="button" id="stickerTabMine" class="px-3 py-1.5 rounded-full bg-blue-600 text-white text-xs font-semibold">My</button>
@@ -985,7 +986,7 @@
           // Snake/cover mode receives queued chat messages and marks them Delivered,
           // but never Seen. Seen is reserved for the actual chat screen.
           if (payload.type === 'NEW_MESSAGE' && payload.message && payload.message.receiverId === rememberedId) {
-            const incoming = payload.message;
+            const incoming = { ...payload.message, seen:false };
             const isNewLocal = !messages.some(m => m.id === incoming.id);
             if (isNewLocal) {
               messages.push(incoming);
@@ -1024,6 +1025,14 @@
               coverMailboxClient.publish(topic, '', { qos: 1, retain: true });
             }
             return;
+          }
+
+          if (payload.type === 'MESSAGES_SEEN') {
+            if (applyMessageSeenReceipt(payload, rememberedId)) await saveMessagesToStorage();
+            // Old unscoped receipts are discarded instead of marking newer messages Seen.
+            if (coverMailboxClient && coverMailboxClient.connected && topic.startsWith(MQTT_INBOX_PREFIX + rememberedId + '/')) {
+              coverMailboxClient.publish(topic, '', { qos:1, retain:true });
+            }
           }
         } catch(e) {}
       });
@@ -1415,7 +1424,7 @@
 
       if (data.type === 'NEW_MESSAGE') {
         if (currentUser && data.message && data.message.receiverId !== currentUser.id && data.message.senderId !== currentUser.id) return;
-        const incoming = data.message;
+        const incoming = data.message && { ...data.message, seen:false };
         const isNewLocal = incoming && !messages.some(m => m.id === incoming.id);
 
         if (isNewLocal) {
@@ -1518,12 +1527,9 @@
       }
 
       if (data.type === 'MESSAGES_SEEN') {
-        if (currentUser && data.readerId === currentUser.partnerId) {
-          messages.forEach(m => {
-            if (m.senderId === currentUser.id) m.seen = true;
-          });
+        if (applyMessageSeenReceipt(data)) {
           await saveMessagesToStorage();
-          renderMessages();
+          if (isChatScreenVisible()) renderMessages();
         }
       }
 
@@ -1594,6 +1600,7 @@
       setupAutoLockListeners();
       setupFilePickerPrivacy();
       setupSecretPushBridge();
+      initChatScrollTracking();
       initSnakeGame();
       setupSecretTrigger();
       initPwaCapabilities();
@@ -2139,6 +2146,7 @@
       const pinScr = document.getElementById('pinScreen');
       const covScr = document.getElementById('coverScreen');
       if (chatScr) chatScr.classList.add('hidden');
+      toggleStickerPanel(false);
       if (pinScr) pinScr.classList.add('hidden');
       if (covScr) covScr.classList.remove('hidden');
       restoreSnakeMessageNoticeState();
@@ -2183,6 +2191,8 @@
       cancelVoiceRecord();
       closeChatAddMenu();
       closePhotoPreview();
+      toggleStickerPanel(false);
+      chatScrollView = null;
 
       if (snakeCanvas) {
         if (!snakeRunning) restartSnakeGame();
@@ -2416,8 +2426,7 @@
       await cleanupExpiredMessages(false);
       if (!stillOpen()) return;
       startRetentionCleanupTimer();
-      renderMessages();
-      scrollChatToLatest();
+      renderMessages({ scrollToLatest:true });
       await markMessagesAsSeen();
       if (!stillOpen()) return;
       // Seen state is now persisted; keep the decoy alert cleared.
@@ -2710,28 +2719,85 @@
       });
     }
 
+    let chatScrollView = null;
+    let chatViewportResizeObserver = null;
+
+    function captureChatViewport(container) {
+      const top = container.getBoundingClientRect().top + container.clientTop;
+      const anchor = Array.from(container.children).find(row =>
+        row.dataset.messageId && row.getBoundingClientRect().bottom > top + 1
+      );
+      return {
+        followBottom:isChatNearBottom(container, 24),
+        scrollTop:container.scrollTop,
+        anchorId:anchor ? anchor.dataset.messageId : null,
+        anchorOffset:anchor ? anchor.getBoundingClientRect().top - top : 0,
+        programmaticTop:null
+      };
+    }
+
+    function restoreChatViewport(view = chatScrollView) {
+      const container = document.getElementById('messagesContainer');
+      if (!container || !view || view !== chatScrollView || !isChatScreenVisible()) return;
+      if (view.followBottom) {
+        container.scrollTop = container.scrollHeight;
+      } else {
+        const anchor = Array.from(container.children).find(row => row.dataset.messageId === view.anchorId);
+        if (anchor) {
+          const top = container.getBoundingClientRect().top + container.clientTop;
+          container.scrollTop += anchor.getBoundingClientRect().top - top - view.anchorOffset;
+        } else {
+          container.scrollTop = view.scrollTop;
+        }
+      }
+      view.programmaticTop = container.scrollTop;
+    }
+
+    function initChatScrollTracking() {
+      const container = document.getElementById('messagesContainer');
+      if (!container || container.dataset.scrollTracking === '1') return;
+      container.dataset.scrollTracking = '1';
+      const userTookControl = () => {
+        if (!chatScrollView || !isChatScreenVisible()) return;
+        // Cancel pending bottom-follow as soon as the user touches/scrolls history.
+        chatScrollView = captureChatViewport(container);
+        chatScrollView.followBottom = false;
+      };
+      container.addEventListener('pointerdown', userTookControl, { passive:true });
+      container.addEventListener('touchstart', userTookControl, { passive:true });
+      container.addEventListener('wheel', userTookControl, { passive:true });
+      container.addEventListener('keydown', event => {
+        if (['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)) userTookControl();
+      });
+      container.addEventListener('scroll', () => {
+        if (!chatScrollView || !isChatScreenVisible()) return;
+        if (chatScrollView.programmaticTop !== null && Math.abs(container.scrollTop - chatScrollView.programmaticTop) < 1) return;
+        chatScrollView = captureChatViewport(container);
+      }, { passive:true });
+      if ('ResizeObserver' in window) {
+        chatViewportResizeObserver = new ResizeObserver(() => restoreChatViewport());
+        chatViewportResizeObserver.observe(container);
+      }
+    }
+
     function scrollChatToLatest() {
       const container = document.getElementById('messagesContainer');
       if (!container) return;
-      const goBottom = () => { container.scrollTop = container.scrollHeight; };
-      requestAnimationFrame(() => {
-        goBottom();
-        requestAnimationFrame(goBottom);
-      });
-      setTimeout(goBottom, 80);
-      setTimeout(goBottom, 250);
-      setTimeout(goBottom, 700);
-      container.querySelectorAll('img').forEach(img => {
-        if (!img.complete) img.addEventListener('load', goBottom, { once: true });
-      });
+      const view = chatScrollView = captureChatViewport(container);
+      view.followBottom = true;
+      restoreChatViewport(view);
+      requestAnimationFrame(() => restoreChatViewport(view));
     }
 
-    function renderMessages() {
+    function renderMessages(options = {}) {
       const container = document.getElementById('messagesContainer');
       if (!container) return;
+      const view = captureChatViewport(container);
+      if (options.scrollToLatest) view.followBottom = true;
+      chatScrollView = view;
       container.innerHTML = '';
       visibleDeleteMsgId = null;
-      if (!currentUser) return;
+      if (!currentUser) { chatScrollView = null; return; }
 
       const lastMessageId = messages.length ? messages[messages.length - 1].id : null;
 
@@ -2832,7 +2898,16 @@
       const typingEl = ensureTypingIndicatorInMessages();
       if (typingEl) typingEl.classList.toggle('hidden', !partnerTypingActive);
 
-      scrollChatToLatest();
+      restoreChatViewport(view);
+      requestAnimationFrame(() => restoreChatViewport(view));
+      container.querySelectorAll('img').forEach(img => {
+        if (img.complete) return;
+        const restoreAfterLoad = () => {
+          if (img.isConnected && container.contains(img)) restoreChatViewport();
+        };
+        img.addEventListener('load', restoreAfterLoad, { once:true });
+        img.addEventListener('error', restoreAfterLoad, { once:true });
+      });
     }
 
     function loadMyStickers() {
@@ -2971,7 +3046,7 @@
       messages.push(newMsg);
       await saveMessagesToStorage();
       queueMessageAnimation(newMsg, 'outgoing');
-      renderMessages();
+      renderMessages({ scrollToLatest:true });
       cancelReply();
       toggleStickerPanel(false);
       sendNetworkPayload({ type:'NEW_MESSAGE', message:newMsg }, newMsg.receiverId, true);
@@ -3103,6 +3178,24 @@
       if (input) input.addEventListener('change', async () => { const f=input.files && input.files[0]; if (f) await addStickerFromFile(f); input.value=''; });
       if (packInput) packInput.addEventListener('change', async () => { const files=packInput.files; if (files && files.length) await addStickerPackFromFiles(files); packInput.value=''; });
       const msgInput = document.getElementById('messageInput');
+      const panel = document.getElementById('stickerPanel');
+      if (panel && panel.dataset.dismissReady !== '1') {
+        panel.dataset.dismissReady = '1';
+        const dismissOutside = event => {
+          if (panel.classList.contains('hidden')) return;
+          const target = event.target;
+          if (panel.contains(target)) return;
+          if (target && typeof target.closest === 'function' && target.closest('#openStickerBtn, #addMenuSticker')) return;
+          toggleStickerPanel(false);
+        };
+        document.addEventListener('pointerdown', dismissOutside, true);
+        document.addEventListener('click', dismissOutside, true);
+        if (!('PointerEvent' in window)) document.addEventListener('touchstart', dismissOutside, { capture:true, passive:true });
+        if (msgInput) {
+          msgInput.addEventListener('focus', () => toggleStickerPanel(false));
+          msgInput.addEventListener('input', () => toggleStickerPanel(false));
+        }
+      }
       if (msgInput) msgInput.addEventListener('paste', async (e) => {
         const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
         const imageItem = items.find(it => it.type && it.type.startsWith('image/'));
@@ -3153,9 +3246,8 @@
         // Only follow the typing bubble if the user was already reading the
         // newest messages. If they scrolled up, never force them back down.
         if (wasNearBottom && container) {
-          requestAnimationFrame(() => {
-            container.scrollTop = container.scrollHeight;
-          });
+          const view = chatScrollView;
+          if (view && view.followBottom) requestAnimationFrame(() => restoreChatViewport(view));
         }
 
         partnerTypingTimer = setTimeout(() => showPartnerTyping(false), 2200);
@@ -3224,7 +3316,7 @@
       messages.push(newMsg);
       await saveMessagesToStorage();
       queueMessageAnimation(newMsg, 'outgoing');
-      renderMessages();
+      renderMessages({ scrollToLatest:true });
 
       input.value = '';
       if (currentUser) localStorage.removeItem(`chat_draft_${currentUser.id}`);
@@ -3316,7 +3408,7 @@
           messages.push(newMsg);
           await saveMessagesToStorage();
           queueMessageAnimation(newMsg, 'outgoing');
-          renderMessages();
+          renderMessages({ scrollToLatest:true });
 
           sendNetworkPayload({ type: 'NEW_MESSAGE', message: newMsg }, newMsg.receiverId, true);
           cancelReply();
@@ -3411,34 +3503,50 @@
       showToast("Conversation cleared");
     }
 
-    async function markMessagesAsSeen(forceReceipt = false) {
-      if (!currentUser) return;
-
+    function applyMessageSeenReceipt(data, ownerId = currentOrLastUserId()) {
+      const owner = getUserConfigById(ownerId);
+      if (!owner || !data || data.readerId !== owner.partnerId || data.targetId !== owner.id || !Array.isArray(data.messageIds)) return false;
+      // A delayed receipt can only acknowledge the exact messages that were read.
+      // Legacy "everything seen" receipts cannot safely acknowledge newer messages.
+      const ids = new Set(data.messageIds.filter(id => typeof id === 'string' && id));
+      if (!ids.size) return false;
       let updated = false;
-      let hasReceivedMessages = false;
-      messages.forEach(m => {
-        if (m.receiverId === currentUser.id && !m.deleted) {
-          hasReceivedMessages = true;
-          if (!m.seen) {
-            m.seen = true;
-            updated = true;
-          }
+      messages.forEach(message => {
+        if (message.senderId !== owner.id || message.receiverId !== owner.partnerId || message.deleted || !ids.has(message.id)) return;
+        if (!message.seen || !message.sent || !message.delivered || message.seenBy !== data.readerId) updated = true;
+        message.sent = true;
+        message.delivered = true;
+        message.seen = true;
+        message.seenBy = data.readerId;
+        message.seenAt = Number(data.timestamp) || Date.now();
+      });
+      return updated;
+    }
+
+    async function markMessagesAsSeen(forceReceipt = false) {
+      if (!currentUser || !isChatScreenVisible()) return;
+      const reader = currentUser;
+      const readAt = Date.now();
+      const messageIds = [];
+      let updated = false;
+      messages.forEach(message => {
+        if (message.receiverId !== reader.id || message.senderId !== reader.partnerId || message.deleted) return;
+        if (!message.seen) {
+          message.seen = true;
+          message.seenBy = reader.id;
+          message.seenAt = readAt;
+          updated = true;
+          messageIds.push(message.id);
+        } else if (forceReceipt) {
+          messageIds.push(message.id);
         }
       });
-
-      if (updated) {
-        await saveMessagesToStorage();
-      }
-
-      // Force-send after MQTT reconnects too. This repairs the case where the
-      // message was marked seen locally before the socket had connected.
-      if ((updated || forceReceipt) && hasReceivedMessages && mqttClient && mqttClient.connected) {
-        sendNetworkPayload({
-          type: 'MESSAGES_SEEN',
-          readerId: currentUser.id,
-          timestamp: Date.now()
-        }, currentUser.partnerId, true);
-      }
+      if (updated) await saveMessagesToStorage();
+      if (!messageIds.length || currentUser !== reader || !isChatScreenVisible() || !mqttClient || !mqttClient.connected) return;
+      await sendNetworkPayload({
+        type:'MESSAGES_SEEN', readerId:reader.id, targetId:reader.partnerId,
+        messageIds, timestamp:readAt
+      }, reader.partnerId, true);
     }
 
 
@@ -3938,7 +4046,7 @@
       messages.push(m);
       await saveMessagesToStorage();
       queueMessageAnimation(m, 'outgoing');
-      renderMessages();
+      renderMessages({ scrollToLatest:true });
       cancelReply();
       clearPendingFileDraft(m.senderId);
       sendNetworkPayload({type:'NEW_MESSAGE', message:m}, m.receiverId, true);
@@ -3953,7 +4061,7 @@
         showToast('Preparing file…');
         const content = await readFileAsDataURL(file);
         const m = { id:'msg_'+Date.now()+'_'+Math.random().toString(16).slice(2,6), senderId:currentUser.id, receiverId:currentUser.partnerId, type:'file', content, fileName:file.name || 'File', fileType:file.type || 'application/octet-stream', fileSize:file.size || 0, replyTo:activeReply?{...activeReply}:null, timestamp:Date.now(), seen: false, sent: false, delivered: false };
-        messages.push(m); await saveMessagesToStorage(); queueMessageAnimation(m, 'outgoing'); renderMessages(); cancelReply();
+        messages.push(m); await saveMessagesToStorage(); queueMessageAnimation(m, 'outgoing'); renderMessages({ scrollToLatest:true }); cancelReply();
         sendNetworkPayload({type:'NEW_MESSAGE', message:m}, m.receiverId, true);
       } catch(e) { showToast('Could not send file'); }
     }
@@ -3989,7 +4097,7 @@
     }
     async function sendPhotoFile(file) {
       if(!currentUser||!file) return;
-      try { showToast('Preparing photo…'); const content=await compressPhotoFile(file); const m={id:'msg_'+Date.now()+'_'+Math.random().toString(16).slice(2,6),senderId:currentUser.id,receiverId:currentUser.partnerId,type:'image',content,replyTo:activeReply?{...activeReply}:null,timestamp:Date.now(),seen: false, sent: false, delivered: false}; messages.push(m); await saveMessagesToStorage(); queueMessageAnimation(m, 'outgoing'); renderMessages(); cancelReply(); sendNetworkPayload({type:'NEW_MESSAGE',message:m},m.receiverId,true); }
+      try { showToast('Preparing photo…'); const content=await compressPhotoFile(file); const m={id:'msg_'+Date.now()+'_'+Math.random().toString(16).slice(2,6),senderId:currentUser.id,receiverId:currentUser.partnerId,type:'image',content,replyTo:activeReply?{...activeReply}:null,timestamp:Date.now(),seen: false, sent: false, delivered: false}; messages.push(m); await saveMessagesToStorage(); queueMessageAnimation(m, 'outgoing'); renderMessages({ scrollToLatest:true }); cancelReply(); sendNetworkPayload({type:'NEW_MESSAGE',message:m},m.receiverId,true); }
       catch(e){showToast(e.message==='Photo too large'?'Photo too large':'Could not send photo');}
     }
     let previewPhotoMsgId=null;
