@@ -10,4 +10,4 @@ self.SNAKE_FIREBASE_CONFIG = {
 };
 
 // Firebase Console -> Project settings -> Cloud Messaging -> Web Push certificates -> Generate key pair
-self.SNAKE_VAPID_KEY = "BD_9gRXYvNV233R0nFxG-rsc5DiYPwBHjMykcOOAQpG-w7dvr_LuFcFjMLgCqmApjk902CeWQq8yG-KTErfVwUk";
+self.SNAKE_VAPID_KEY = "BLCsiQBX1QLT508ZsNxZoNFSDbCLVB5RjMPA1NiHafQROuvlvF-JlSimh6PM_0OAOU0z2OR3a-krJkHKvQe8RMw";
