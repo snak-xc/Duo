@@ -2018,7 +2018,7 @@
           snakeCtx.fill();
           // Bonus food timer progress
 const now = Date.now();
-const totalDuration = 5000 + Math.floor(Math.random() * 3001); // bonus food lifetime
+const totalDuration = 5000; // bonus food lifetime
 const remaining = Math.max(0, snakeBonusExpiresAt - now);
 
 const progress = Math.max(
