@@ -2019,7 +2019,7 @@
           snakeCtx.strokeStyle = 'rgba(251,191,36,.45)';
           snakeCtx.lineWidth = Math.max(2, cell*.08);
           snakeCtx.beginPath();
-          snakeCtx.arc((snakeBonusFood.x+.5)*cell,(snakeBonusFood.y+.5)*cell,cell*.53,0,Math.PI*2);
+          snakeCtx.arc((snakeBonusFood.x+.5)*cell,(snakeBonusFood.y+.5)*cell,cell*.53,0,Math.PI*2*progress);
           snakeCtx.stroke();
         }
       }
