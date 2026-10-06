@@ -2016,11 +2016,41 @@
           snakeCtx.beginPath();
           snakeCtx.arc((snakeBonusFood.x+.5)*cell,(snakeBonusFood.y+.5)*cell,cell*.43,0,Math.PI*2);
           snakeCtx.fill();
-          snakeCtx.strokeStyle = 'rgba(251,191,36,.45)';
-          snakeCtx.lineWidth = Math.max(2, cell*.08);
-          snakeCtx.beginPath();
-          snakeCtx.arc((snakeBonusFood.x+.5)*cell,(snakeBonusFood.y+.5)*cell,cell*.53,0,Math.PI*2);
-          snakeCtx.stroke();
+          // Bonus food timer progress
+const now = Date.now();
+const totalDuration = 5000 + Math.floor(Math.random() * 3001); // bonus food lifetime
+const remaining = Math.max(0, snakeBonusExpiresAt - now);
+
+const progress = Math.max(
+  0,
+  Math.min(1, remaining / totalDuration)
+);
+
+const cx = (snakeBonusFood.x + 0.5) * cell;
+const cy = (snakeBonusFood.y + 0.5) * cell;
+const radius = cell * 0.53;
+
+// Timer stroke
+snakeCtx.strokeStyle = 'rgba(251,191,36,.55)';
+snakeCtx.lineWidth = Math.max(2, cell * 0.08);
+snakeCtx.lineCap = 'round';
+
+snakeCtx.beginPath();
+
+const startAngle = -Math.PI / 2;
+const endAngle =
+  startAngle + (Math.PI * 2 * progress);
+
+snakeCtx.arc(
+  cx,
+  cy,
+  radius,
+  startAngle,
+  endAngle,
+  false
+);
+
+snakeCtx.stroke();
         }
       }
 
