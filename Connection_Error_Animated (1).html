@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0b1020">
+  <title>Connection unavailable</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100svh; display: grid; place-items: center; overflow: hidden; color: #f4f7ff; background: radial-gradient(circle at 50% 34%, #1c2b51 0, #101a34 34%, #0b1020 72%); }
+    body::before { content: ""; position: fixed; inset: 0; opacity: .32; background-image: linear-gradient(#8aa6dc12 1px, transparent 1px), linear-gradient(90deg, #8aa6dc12 1px, transparent 1px); background-size: 40px 40px; mask-image: radial-gradient(circle at center, #000, transparent 75%); pointer-events: none; }
+    .glow { position: fixed; width: min(78vw, 580px); aspect-ratio: 1; border-radius: 50%; background: #408bff; filter: blur(105px); opacity: .12; pointer-events: none; animation: breathe 5s ease-in-out infinite; }
+    main { position: relative; width: min(92vw, 520px); padding: 48px 30px 52px; text-align: center; border: 1px solid #b9caff25; border-radius: 28px; background: linear-gradient(150deg, #ffffff12, #ffffff06 55%, #ffffff09); box-shadow: 0 24px 80px #0005, inset 0 1px #ffffff1c; backdrop-filter: blur(18px); animation: arrive .8s both; }
+    .badge { display: inline-flex; align-items: center; gap: 8px; padding: 7px 13px; border: 1px solid #ff9b8b3a; border-radius: 999px; background: #f36c5d14; color: #ffc5b8; font-size: 11px; font-weight: 750; letter-spacing: .16em; text-transform: uppercase; }
+    .badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #ff8c78; box-shadow: 0 0 12px #ff8c78; animation: blink 2s infinite; }
+    .illustration { position: relative; display: grid; place-items: center; width: 222px; height: 222px; margin: 18px auto 5px; }
+    .ring { position: absolute; border: 1px solid #75aaff29; border-radius: 50%; animation: ripple 4.5s ease-out infinite; }
+    .ring:nth-child(1) { width: 115px; height: 115px; }
+    .ring:nth-child(2) { width: 160px; height: 160px; animation-delay: 1.5s; }
+    .ring:nth-child(3) { width: 205px; height: 205px; animation-delay: 3s; }
+    .icon { position: relative; display: grid; place-items: center; width: 102px; height: 102px; border: 1px solid #97b9ff46; border-radius: 28px; background: linear-gradient(145deg, #2b4e89, #152747); box-shadow: 0 16px 40px #050a1b88, inset 0 1px #ffffff34; transform: rotate(-8deg); animation: float 4s ease-in-out infinite; }
+    .icon svg { width: 59px; height: 59px; transform: rotate(8deg); fill: none; stroke: #aed1ff; stroke-width: 2.8; stroke-linecap: round; stroke-linejoin: round; }
+    .icon .slash { stroke: #ff9c8d; stroke-width: 3.5; }
+    h1 { margin: 3px 0 11px; font-size: clamp(27px, 6vw, 38px); line-height: 1.16; letter-spacing: -.04em; }
+    p { max-width: 390px; margin: 0 auto; color: #aebbd5; font-size: clamp(15px, 3.8vw, 17px); line-height: 1.65; }
+    .line { width: 56px; height: 3px; margin: 27px auto 0; border-radius: 10px; background: linear-gradient(90deg, #5f9cff, #a9c5ff); box-shadow: 0 0 22px #6aa7ff8c; animation: stretch 3s ease-in-out infinite; }
+    @keyframes float { 50% { transform: translateY(-10px) rotate(-5deg); } }
+    @keyframes ripple { 0% { transform: scale(.8); opacity: 0; } 30% { opacity: .9; } 100% { transform: scale(1.17); opacity: .15; } }
+    @keyframes blink { 50% { opacity: .32; } }
+    @keyframes stretch { 50% { width: 100px; opacity: .55; } }
+    @keyframes breathe { 50% { opacity: .22; transform: scale(1.08); } }
+    @keyframes arrive { from { opacity: 0; transform: translateY(18px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+    @media (max-width: 400px) { main { padding: 39px 20px 43px; } .illustration { width: 190px; height: 190px; } .ring:nth-child(3) { width: 184px; height: 184px; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
+  </style>
+</head>
+<body>
+  <div class="glow" aria-hidden="true"></div>
+  <main role="alert">
+    <div class="badge">Connection issue</div>
+    <div class="illustration" aria-hidden="true">
+      <div class="ring"></div><div class="ring"></div><div class="ring"></div>
+      <div class="icon"><svg viewBox="0 0 64 64"><path d="M8 25c13-12 35-12 48 0M16 33c9-8 23-8 32 0M24 41c4-4 12-4 16 0"/><circle cx="32" cy="49" r="2.3" fill="#aed1ff" stroke="none"/><path class="slash" d="M12 55 52 14"/></svg></div>
+    </div>
+    <h1>Connection unavailable</h1>
+    <p>Cannot connect at this time, Please try again later.</p>
+    <div class="line" aria-hidden="true"></div>
+  </main>
+</body>
+</html>
